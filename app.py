@@ -16,6 +16,8 @@ import numpy as np
 import math
 import io
 import os
+import json
+import urllib.request
 
 
 # ─── Page Config ──────────────────────────────────────────────────────
@@ -34,6 +36,39 @@ TILE_URLS = {
     "carto-darkmatter": "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
     "carto-positron": "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
 }
+
+# ─── CARTO Style URL → GL style JSON (for English map labels) ────────
+_CARTO_STYLE_URLS = {
+    "carto-darkmatter": "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    "carto-positron": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _english_carto_style(base: str) -> dict | None:
+    """Fetch CARTO GL style JSON and rewrite text-fields to prefer English.
+
+    CARTO vector tiles contain a ``name:en`` property with English names.
+    By default the style uses ``name`` (local language).  We replace every
+    ``text-field`` expression with a coalesce that prefers English.
+    """
+    url = _CARTO_STYLE_URLS.get(base)
+    if not url:
+        return None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "travoid/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            style = json.loads(resp.read())
+    except Exception:
+        return None
+
+    en_expr = ["coalesce", ["get", "name:en"], ["get", "name_en"], ["get", "name"]]
+    for layer in style.get("layers", []):
+        layout = layer.get("layout", {})
+        if "text-field" in layout:
+            layout["text-field"] = en_expr
+    return style
+
 
 # ─── Theme Definitions ───────────────────────────────────────────────
 THEMES = {
@@ -273,10 +308,12 @@ def _export_viewport(lats: list, lons: list, n_locs: int,
 def _build_fig(locs: list, th: dict) -> go.Figure:
     """Build an interactive Plotly Scattermap preview (blue markers)."""
     fig = go.Figure()
+    # Prefer English-labelled CARTO style; fall back to built-in name
+    map_style = _english_carto_style(th["mapbox"]) or th["mapbox"]
 
     if not locs:
         fig.update_layout(
-            map=dict(style=th["mapbox"], center=dict(lat=36.5, lon=138.0), zoom=4),
+            map=dict(style=map_style, center=dict(lat=36.5, lon=138.0), zoom=4),
             margin=dict(l=0, r=0, t=0, b=0),
             height=520,
         )
@@ -315,7 +352,7 @@ def _build_fig(locs: list, th: dict) -> go.Figure:
     clon = sum(lons) / len(lons)
 
     fig.update_layout(
-        map=dict(style=th["mapbox"], center=dict(lat=clat, lon=clon),
+        map=dict(style=map_style, center=dict(lat=clat, lon=clon),
                  zoom=_zoom(lats, lons)),
         margin=dict(l=0, r=0, t=0, b=0),
         height=520,
@@ -362,10 +399,11 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
     clat, clon, zoom = _export_viewport(lats, lons, n, W, H)
 
     # ── 2. Base map ────────────────────────────────────────────────────
-    # Primary: Plotly + kaleido → English labels via Mapbox GL vector tiles
-    # Fallback: staticmap raster tiles (no-labels variant)
+    # Primary: Plotly + kaleido with English-labelled CARTO GL style.
+    # Fallback: staticmap raster tiles (no-labels variant).
     # Mapbox GL uses 512 px tiles, so zoom - 1 gives the same viewport
     # as staticmap zoom with 256 px tiles.
+    map_style = _english_carto_style(th["mapbox"]) or th["mapbox"]
     used_kaleido = False
     try:
         export_fig = go.Figure()
@@ -376,7 +414,7 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
                 hoverinfo="skip", showlegend=False,
             ))
         export_fig.update_layout(
-            map=dict(style=th["mapbox"],
+            map=dict(style=map_style,
                      center=dict(lat=clat, lon=clon),
                      zoom=zoom - 1),
             margin=dict(l=0, r=0, t=0, b=0),
@@ -416,7 +454,7 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
     ov[:top_h, :, 3] = np.broadcast_to(alpha_t, (top_h, W))
 
     # Bottom fade (location-list area)
-    bot_h = max(360, 190 + n * 42)
+    bot_h = max(400, 200 + n * 52)
     bot_h = min(bot_h, H - top_h - 40)
     ys_b = np.arange(bot_h, dtype=np.float64).reshape(-1, 1)
     alpha_b = (250 * np.power(ys_b / bot_h, 1.7)).clip(0, 255).astype(np.uint8)
@@ -443,7 +481,7 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
         _draw_dashed_line(draw, pxs[i], pxs[i + 1], line_col, width=2, dash=10, gap=6)
 
     # Numbered markers — unified blue with border ring
-    ft_label = _font(13)
+    ft_label = _font(14, bold=True)
 
     for i, (px, py) in enumerate(pxs):
         border_col = (255, 255, 255, 200) if is_dark else (40, 40, 50, 160)
@@ -462,15 +500,21 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
         draw.text((px - nw // 2, py - nh // 2 - 1), ns,
                   fill=(255, 255, 255), font=ft_map_num)
 
-        # English location name — only when fallback (no-labels) tiles are used
+        # English location badge — only when fallback (no-labels) tiles
         if not used_kaleido:
             lbl = locs[i]["name"]
             lb = draw.textbbox((0, 0), lbl, font=ft_label)
-            lw = lb[2] - lb[0]
-            lx = px + marker_r + 8 if px + marker_r + lw + 12 < W else px - marker_r - lw - 8
-            ly = py - 8
-            shadow = (0, 0, 0) if is_dark else (255, 255, 255)
-            draw.text((lx + 1, ly + 1), lbl, fill=shadow, font=ft_label)
+            lw, lh = lb[2] - lb[0], lb[3] - lb[1]
+            pad_x, pad_y = 7, 4
+            if px + marker_r + lw + pad_x * 2 + 8 < W:
+                lx = px + marker_r + 8
+            else:
+                lx = px - marker_r - lw - pad_x * 2 - 8
+            ly = py - (lh + pad_y * 2) // 2
+            badge_bg = (0, 0, 0, 180) if is_dark else (255, 255, 255, 200)
+            badge_rect = [lx - pad_x, ly - pad_y,
+                          lx + lw + pad_x, ly + lh + pad_y]
+            draw.rounded_rectangle(badge_rect, radius=6, fill=badge_bg)
             draw.text((lx, ly), lbl, fill=th["text"], font=ft_label)
 
     # ── 5. Title text ────────────────────────────────────────────────
@@ -505,11 +549,11 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
 
     # ── 7. Location list at bottom ───────────────────────────────────
     if n <= 8:
-        item_h, lf_sz, nf_sz, circ_r = 42, 19, 14, 15
+        item_h, lf_sz, nf_sz, circ_r = 50, 24, 17, 18
     elif n <= 14:
-        item_h, lf_sz, nf_sz, circ_r = 34, 16, 12, 13
+        item_h, lf_sz, nf_sz, circ_r = 40, 20, 15, 16
     else:
-        item_h, lf_sz, nf_sz, circ_r = 28, 14, 11, 11
+        item_h, lf_sz, nf_sz, circ_r = 34, 17, 13, 14
 
     ft_l = _font(lf_sz)
     ft_n = _font(nf_sz, bold=True)
