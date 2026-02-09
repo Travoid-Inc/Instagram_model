@@ -103,9 +103,14 @@ st.markdown(
 @st.cache_data(ttl=86400, show_spinner=False)
 def geocode(name: str) -> dict | None:
     """Geocode a location name → lat / lon (tries Japan first)."""
-    geo = Nominatim(user_agent="travoid_map_v3", timeout=10)
+    import time as _time
+    geo = Nominatim(
+        user_agent="travoid_instagram_map_generator/1.0 (contact: travoid.inc@gmail.com)",
+        timeout=15,
+    )
     for query in [f"{name}, Japan", name]:
         try:
+            _time.sleep(1.1)  # Nominatim requires ≤1 req/s
             r = geo.geocode(query, language="en")
             if r:
                 return {"lat": r.latitude, "lon": r.longitude, "addr": r.address}
