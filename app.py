@@ -8,8 +8,8 @@ and export a polished 1080×1350 image ready to post.
 
 import streamlit as st
 import plotly.graph_objects as go
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+from geopy.geocoders import Nominatim, Photon
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable, GeocoderServiceError
 from staticmap import StaticMap, CircleMarker
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
@@ -102,20 +102,47 @@ st.markdown(
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def geocode(name: str) -> dict | None:
-    """Geocode a location name → lat / lon (tries Japan first)."""
+    """Geocode a location name → lat / lon.
+
+    Primary: Photon (Komoot) — works reliably from cloud environments.
+    Fallback: Nominatim — in case Photon is temporarily unavailable.
+    """
+    queries = [f"{name}, Japan", name]
+
+    # ── Primary: Photon (no IP-based blocking) ──
+    try:
+        photon = Photon(
+            user_agent="travoid_instagram_map_generator/1.0",
+            timeout=15,
+        )
+        for q in queries:
+            try:
+                r = photon.geocode(q, language="en")
+                if r:
+                    return {"lat": r.latitude, "lon": r.longitude, "addr": r.address}
+            except (GeocoderTimedOut, GeocoderUnavailable, GeocoderServiceError):
+                continue
+    except Exception:
+        pass
+
+    # ── Fallback: Nominatim ──
     import time as _time
-    geo = Nominatim(
-        user_agent="travoid_instagram_map_generator/1.0 (contact: travoid.inc@gmail.com)",
-        timeout=15,
-    )
-    for query in [f"{name}, Japan", name]:
-        try:
-            _time.sleep(1.1)  # Nominatim requires ≤1 req/s
-            r = geo.geocode(query, language="en")
-            if r:
-                return {"lat": r.latitude, "lon": r.longitude, "addr": r.address}
-        except (GeocoderTimedOut, GeocoderUnavailable):
-            continue
+    try:
+        nominatim = Nominatim(
+            user_agent="travoid_instagram_map_generator/1.0 (contact: travoid.inc@gmail.com)",
+            timeout=15,
+        )
+        for q in queries:
+            try:
+                _time.sleep(1.1)
+                r = nominatim.geocode(q, language="en")
+                if r:
+                    return {"lat": r.latitude, "lon": r.longitude, "addr": r.address}
+            except (GeocoderTimedOut, GeocoderUnavailable, GeocoderServiceError):
+                continue
+    except Exception:
+        pass
+
     return None
 
 
