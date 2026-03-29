@@ -6,6 +6,8 @@ Add Japan destinations, visualize the route on a stylish map,
 and export a polished 1080×1350 image ready to post.
 """
 
+from __future__ import annotations
+
 import streamlit as st
 import plotly.graph_objects as go
 from geopy.geocoders import Nominatim, Photon
@@ -18,6 +20,8 @@ import io
 import os
 import json
 import urllib.request
+import uuid
+from typing import Optional, Tuple
 
 
 # ─── Page Config ──────────────────────────────────────────────────────
@@ -45,7 +49,7 @@ _CARTO_STYLE_URLS = {
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _english_carto_style(base: str) -> dict | None:
+def _english_carto_style(base: str) -> Optional[dict]:
     """Fetch CARTO GL style JSON and rewrite text-fields to prefer English.
 
     CARTO vector tiles contain a ``name:en`` property with English names.
@@ -103,11 +107,33 @@ THEMES = {
 
 IG_W, IG_H = 1080, 1350  # Instagram portrait format
 
+
+def _ensure_location_ids(locations: list) -> None:
+    for loc in locations:
+        if "id" not in loc:
+            loc["id"] = uuid.uuid4().hex[:10]
+
+
+def _sync_route_display_names_from_widgets(locations: list) -> None:
+    """Apply Route Details text_input values before sidebar so labels stay in sync."""
+    for loc in locations:
+        wk = f"route_disp_{loc['id']}"
+        if wk not in st.session_state:
+            continue
+        new = st.session_state[wk]
+        if new != loc.get("name", ""):
+            loc["name"] = new
+            st.session_state.gen_image = None
+
+
 # ─── Session State ────────────────────────────────────────────────────
 if "locations" not in st.session_state:
     st.session_state.locations = []
 if "gen_image" not in st.session_state:
     st.session_state.gen_image = None
+
+_ensure_location_ids(st.session_state.locations)
+_sync_route_display_names_from_widgets(st.session_state.locations)
 
 # ─── CSS ──────────────────────────────────────────────────────────────
 st.markdown(
@@ -136,7 +162,7 @@ st.markdown(
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def geocode(name: str) -> dict | None:
+def geocode(name: str) -> Optional[dict]:
     """Geocode a location name → lat / lon.
 
     Primary: Photon (Komoot) — works reliably from cloud environments.
@@ -225,7 +251,7 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
 
 # ─── Coordinate Conversion ────────────────────────────────────────────
 
-def _to_tile(lat: float, lon: float, zoom: float) -> tuple[float, float]:
+def _to_tile(lat: float, lon: float, zoom: float) -> Tuple[float, float]:
     """Convert lat/lon to tile coordinates at the given zoom level."""
     zs = 2 ** zoom
     x = (lon + 180) / 360 * zs
@@ -235,7 +261,7 @@ def _to_tile(lat: float, lon: float, zoom: float) -> tuple[float, float]:
 
 
 def _latlng_to_px(lat: float, lon: float, clat: float, clon: float,
-                  zoom: float, w: int, h: int, tile_size: int = 256) -> tuple[int, int]:
+                  zoom: float, w: int, h: int, tile_size: int = 256) -> Tuple[int, int]:
     """Convert lat/lon → pixel coordinates on a static-map image.
 
     tile_size=256 for standard Web Mercator tiles (staticmap),
@@ -250,7 +276,7 @@ def _latlng_to_px(lat: float, lon: float, clat: float, clon: float,
 
 
 def _export_viewport(lats: list, lons: list, n_locs: int,
-                     img_w: int = 1080, img_h: int = 1350) -> tuple[float, float, int]:
+                     img_w: int = 1080, img_h: int = 1350) -> Tuple[float, float, int]:
     """Compute optimised center & integer zoom for the exported image.
 
     Accounts for the title overlay at the top and location-list overlay
@@ -266,7 +292,8 @@ def _export_viewport(lats: list, lons: list, n_locs: int,
 
     # Visible area after gradient overlays (pixels)
     title_px = 180        # title + subtitle + accent line
-    list_px = max(160, 55 + n_locs * 42)
+    # Bottom margin for route list + compact transparent logo strip
+    list_px = max(160, 55 + n_locs * 42) + 58
     eff_h = img_h - title_px - list_px        # effective visible height
     eff_w = img_w - 60                         # small horizontal margin
 
@@ -362,6 +389,34 @@ def _build_fig(locs: list, th: dict) -> go.Figure:
 
 
 # ─── Instagram Image Renderer ────────────────────────────────────────
+
+def _prepare_bottom_logo(max_w: int = 320) -> Optional[Image.Image]:
+    """Load TRAVOID PNG unchanged (e.g. white on transparent); trim to alpha bounds; resize."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "travoid_logo.png")
+    if not os.path.isfile(path):
+        return None
+    try:
+        im = Image.open(path).convert("RGBA")
+    except Exception:
+        return None
+    arr = np.asarray(im, dtype=np.uint8).copy()
+    alpha = arr[..., 3]
+    if not np.any(alpha > 12):
+        return None
+    ys, xs = np.where(alpha > 12)
+    pad = 2
+    y0 = max(int(ys.min()) - pad, 0)
+    y1 = min(int(ys.max()) + pad + 1, im.height)
+    x0 = max(int(xs.min()) - pad, 0)
+    x1 = min(int(xs.max()) + pad + 1, im.width)
+    arr = arr[y0:y1, x0:x1]
+    w, h = arr.shape[:2]
+    if w > max_w:
+        nh = max(1, int(round(h * max_w / w)))
+        resized = Image.fromarray(arr, "RGBA").resize((max_w, nh), Image.LANCZOS)
+        arr = np.asarray(resized, dtype=np.uint8).copy()
+    return Image.fromarray(arr, "RGBA")
+
 
 def _draw_dashed_line(draw: ImageDraw.Draw, p1: tuple, p2: tuple,
                       color: tuple, width: int = 2, dash: int = 12, gap: int = 8):
@@ -548,6 +603,11 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
     draw = ImageDraw.Draw(canvas)
 
     # ── 7. Location list at bottom ───────────────────────────────────
+    logo_max = max(220, min(360, int(W * 0.34)))
+    logo_im = _prepare_bottom_logo(max_w=logo_max)
+    logo_margin_b = 8
+    logo_reserve = (logo_im.size[1] + logo_margin_b + 14) if logo_im is not None else 0
+
     if n <= 8:
         item_h, lf_sz, nf_sz, circ_r = 50, 24, 17, 18
     elif n <= 14:
@@ -557,7 +617,8 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
 
     ft_l = _font(lf_sz)
     ft_n = _font(nf_sz, bold=True)
-    list_y = H - 55 - n * item_h
+    list_y = H - 55 - n * item_h - logo_reserve
+    list_y = max(list_y, line_y + 48)
 
     for i, loc in enumerate(locs):
         y = list_y + i * item_h
@@ -576,8 +637,18 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
         draw.text((cx + circ_r + 16, y + (item_h - lf_sz) // 2 - 2),
                   loc["name"], fill=th["text"], font=ft_l)
 
-    # ── 8. Subtle border ─────────────────────────────────────────────
+    # ── 8. TRAVOID logo (bottom centre — pixel-accurate from asset) ───────────────
+    if logo_im is not None:
+        lw, lh = logo_im.size
+        lx = (W - lw) // 2
+        ly = H - lh - logo_margin_b
+        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        layer.paste(logo_im, (lx, ly), logo_im)
+        canvas = Image.alpha_composite(canvas, layer)
+
+    # ── 9. Subtle border ─────────────────────────────────────────────
     bdr = tuple(min(c + 30, 255) for c in bg)
+    draw = ImageDraw.Draw(canvas)
     draw.rectangle([0, 0, W - 1, H - 1], outline=bdr, width=2)
 
     return canvas.convert("RGB")
@@ -615,6 +686,7 @@ with st.sidebar:
         if result:
             st.session_state.locations.append(
                 {
+                    "id": uuid.uuid4().hex[:10],
                     "name": q.strip(),
                     "lat": result["lat"],
                     "lon": result["lon"],
@@ -688,12 +760,22 @@ st.plotly_chart(
 
 # ── Location Summary ─────────────────────────────────────────────────
 with st.expander("📍 Route Details", expanded=False):
+    st.caption("Edit display names below. They update the map hover labels, sidebar, and the exported image.")
     for i, loc in enumerate(st.session_state.locations):
         st.markdown(
-            f"**{i + 1}.** {loc['name']}  \n"
-            f"<small style='color:#8B949E'>{loc['addr']}</small>",
+            f"<small style='color:#8B949E'>**Address** · {loc['addr']}</small>",
             unsafe_allow_html=True,
         )
+        wk = f"route_disp_{loc['id']}"
+        if wk not in st.session_state:
+            st.session_state[wk] = loc["name"]
+        st.text_input(
+            f"{i + 1}. Display name",
+            key=wk,
+            help="Shown on the preview map, route list, and Instagram export.",
+        )
+        if i < len(st.session_state.locations) - 1:
+            st.divider()
 
 # ── Generate & Download ─────────────────────────────────────────────
 st.divider()
