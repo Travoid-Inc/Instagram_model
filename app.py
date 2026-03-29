@@ -249,20 +249,19 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-def _font_courier(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """Courier New for Instagram export location list (with Linux / cloud fallbacks)."""
-    paths = [
-        "/System/Library/Fonts/Supplemental/Courier New Bold.ttf"
-        if bold
-        else "/System/Library/Fonts/Supplemental/Courier New.ttf",
-        "/Library/Fonts/Courier New Bold.ttf" if bold else "/Library/Fonts/Courier New.ttf",
-        "/usr/share/fonts/truetype/msttcorefonts/courbd.ttf"
-        if bold
-        else "/usr/share/fonts/truetype/msttcorefonts/cour.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf"
-        if bold
-        else "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-    ]
+def _font_sf_ns(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    """SF NS (San Francisco) for Instagram route list; falls back to _font off macOS."""
+    if bold:
+        paths = [
+            "/System/Library/Fonts/SFCompact.ttf",
+            "/System/Library/Fonts/SFNSRounded.ttf",
+            "/System/Library/Fonts/SFNS.ttf",
+        ]
+    else:
+        paths = [
+            "/System/Library/Fonts/SFNS.ttf",
+            "/System/Library/Fonts/SFCompact.ttf",
+        ]
     for p in paths:
         if os.path.exists(p):
             try:
@@ -617,8 +616,8 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
     else:
         item_h, lf_sz, nf_sz, circ_r = 34, 17, 13, 14
 
-    ft_l = _font_courier(lf_sz)
-    ft_n = _font_courier(nf_sz, bold=True)
+    ft_l = _font_sf_ns(lf_sz)
+    ft_n = _font_sf_ns(nf_sz, bold=True)
     list_y = H - 55 - n * item_h - logo_reserve
     list_y = max(list_y, line_y + 48)
 
