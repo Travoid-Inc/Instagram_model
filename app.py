@@ -249,19 +249,13 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-def _font_sf_ns(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """SF NS (San Francisco) for Instagram route list; falls back to _font off macOS."""
-    if bold:
-        paths = [
-            "/System/Library/Fonts/SFCompact.ttf",
-            "/System/Library/Fonts/SFNSRounded.ttf",
-            "/System/Library/Fonts/SFNS.ttf",
-        ]
-    else:
-        paths = [
-            "/System/Library/Fonts/SFNS.ttf",
-            "/System/Library/Fonts/SFCompact.ttf",
-        ]
+def _font_sf_ns(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+    """SF Compact / SF NS for Instagram route list — heavy faces for legibility."""
+    paths = [
+        "/System/Library/Fonts/SFCompact.ttf",
+        "/System/Library/Fonts/SFNSRounded.ttf",
+        "/System/Library/Fonts/SFNS.ttf",
+    ]
     for p in paths:
         if os.path.exists(p):
             try:
@@ -610,13 +604,13 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
     logo_reserve = (logo_im.size[1] + logo_margin_b + 14) if logo_im is not None else 0
 
     if n <= 8:
-        item_h, lf_sz, nf_sz, circ_r = 50, 24, 17, 18
+        item_h, lf_sz, nf_sz, circ_r = 54, 27, 20, 19
     elif n <= 14:
-        item_h, lf_sz, nf_sz, circ_r = 40, 20, 15, 16
+        item_h, lf_sz, nf_sz, circ_r = 44, 23, 18, 17
     else:
-        item_h, lf_sz, nf_sz, circ_r = 34, 17, 13, 14
+        item_h, lf_sz, nf_sz, circ_r = 38, 20, 16, 15
 
-    ft_l = _font_sf_ns(lf_sz)
+    ft_l = _font_sf_ns(lf_sz, bold=True)
     ft_n = _font_sf_ns(nf_sz, bold=True)
     list_y = H - 55 - n * item_h - logo_reserve
     list_y = max(list_y, line_y + 48)
