@@ -249,6 +249,29 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
+def _font_courier(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    """Courier New for Instagram export location list (with Linux / cloud fallbacks)."""
+    paths = [
+        "/System/Library/Fonts/Supplemental/Courier New Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Courier New.ttf",
+        "/Library/Fonts/Courier New Bold.ttf" if bold else "/Library/Fonts/Courier New.ttf",
+        "/usr/share/fonts/truetype/msttcorefonts/courbd.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/msttcorefonts/cour.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                continue
+    return _font(size, bold=bold)
+
+
 # ─── Coordinate Conversion ────────────────────────────────────────────
 
 def _to_tile(lat: float, lon: float, zoom: float) -> Tuple[float, float]:
@@ -459,7 +482,6 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
     # Mapbox GL uses 512 px tiles, so zoom - 1 gives the same viewport
     # as staticmap zoom with 256 px tiles.
     map_style = _english_carto_style(th["mapbox"]) or th["mapbox"]
-    used_kaleido = False
     try:
         export_fig = go.Figure()
         if len(locs) > 1:
@@ -482,7 +504,6 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
             .convert("RGBA")
             .resize((W, H), Image.LANCZOS)
         )
-        used_kaleido = True
     except Exception:
         # Fallback: staticmap with no-labels tiles
         tile_url = TILE_URLS.get(th["mapbox"], list(TILE_URLS.values())[0])
@@ -535,9 +556,7 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
     for i in range(len(pxs) - 1):
         _draw_dashed_line(draw, pxs[i], pxs[i + 1], line_col, width=2, dash=10, gap=6)
 
-    # Numbered markers — unified blue with border ring
-    ft_label = _font(14, bold=True)
-
+    # Numbered markers only (names appear in the bottom list, not on the map)
     for i, (px, py) in enumerate(pxs):
         border_col = (255, 255, 255, 200) if is_dark else (40, 40, 50, 160)
         draw.ellipse(
@@ -554,23 +573,6 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
         nw, nh = nb[2] - nb[0], nb[3] - nb[1]
         draw.text((px - nw // 2, py - nh // 2 - 1), ns,
                   fill=(255, 255, 255), font=ft_map_num)
-
-        # English location badge — only when fallback (no-labels) tiles
-        if not used_kaleido:
-            lbl = locs[i]["name"]
-            lb = draw.textbbox((0, 0), lbl, font=ft_label)
-            lw, lh = lb[2] - lb[0], lb[3] - lb[1]
-            pad_x, pad_y = 7, 4
-            if px + marker_r + lw + pad_x * 2 + 8 < W:
-                lx = px + marker_r + 8
-            else:
-                lx = px - marker_r - lw - pad_x * 2 - 8
-            ly = py - (lh + pad_y * 2) // 2
-            badge_bg = (0, 0, 0, 180) if is_dark else (255, 255, 255, 200)
-            badge_rect = [lx - pad_x, ly - pad_y,
-                          lx + lw + pad_x, ly + lh + pad_y]
-            draw.rounded_rectangle(badge_rect, radius=6, fill=badge_bg)
-            draw.text((lx, ly), lbl, fill=th["text"], font=ft_label)
 
     # ── 5. Title text ────────────────────────────────────────────────
     ttxt = title.upper()
@@ -615,8 +617,8 @@ def _render(locs: list, title: str, subtitle: str, th: dict) -> Image.Image:
     else:
         item_h, lf_sz, nf_sz, circ_r = 34, 17, 13, 14
 
-    ft_l = _font(lf_sz)
-    ft_n = _font(nf_sz, bold=True)
+    ft_l = _font_courier(lf_sz)
+    ft_n = _font_courier(nf_sz, bold=True)
     list_y = H - 55 - n * item_h - logo_reserve
     list_y = max(list_y, line_y + 48)
 
